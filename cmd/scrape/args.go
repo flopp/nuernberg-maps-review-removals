@@ -147,6 +147,7 @@ Options:
   --save-every <n>          Persist results every n changed rows. Default: 1.
   --delay-min <ms>          Minimum delay between place pages. Default: 2500.
   --delay-max <ms>          Maximum delay between place pages. Default: 6000.
+  --discovery <path>        Discovery JSON path. Default: output/discovery.json. 
   --out <path>              Results JSON path. Default: output/places.json.
   --csv <path>              Results CSV path. Default: output/places.csv.
   --discovery <path>        Discovery JSON path. Default: output/discovery.json.

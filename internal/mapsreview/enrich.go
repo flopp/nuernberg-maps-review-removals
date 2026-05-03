@@ -1,6 +1,6 @@
 package mapsreview
 
-func EnrichPlaceLocation(row *Place) {
+func EnrichPlaceLocation(dm *DistrictManager, row *Place) {
 	if row == nil {
 		return
 	}
@@ -15,7 +15,7 @@ func EnrichPlaceLocation(row *Place) {
 	if row.Lat == nil || row.Lng == nil {
 		return
 	}
-	if bezirk := AssignBezirkForPostcode(*row.Lat, *row.Lng, StringValue(row.Postcode)); bezirk != nil {
+	if bezirk := dm.AssignBezirkForPostcode(*row.Lat, *row.Lng, StringValue(row.Postcode)); bezirk != nil {
 		row.BezirkID = StringPtr(bezirk.ID)
 		row.BezirkName = StringPtr(bezirk.Name)
 	}

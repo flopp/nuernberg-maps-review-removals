@@ -67,15 +67,20 @@ func main() {
 }
 
 func run(args args) error {
+	districts := mapsreview.NewDistrictManager()
+	if districts.Error != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to load district boundaries: %v\n", districts.Error)
+	}
+
 	rows, err := mapsreview.ReadJSON(args.Input, []mapsreview.Place{})
 	if err != nil {
 		return err
 	}
-	data := makeClientRows(rows)
+	data := makeClientRows(rows, districts)
 	if err := os.MkdirAll(filepath.Dir(args.Output), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(args.Output, []byte(makeHTML(args, data)), 0o644); err != nil {
+	if err := os.WriteFile(args.Output, []byte(makeHTML(args, data, districts)), 0o644); err != nil {
 		return err
 	}
 	fmt.Printf("wrote %s\n", args.Output)
@@ -119,13 +124,13 @@ func splitArg(argv []string, index int) (key string, value string, consume bool)
 	return arg, "", false
 }
 
-func makeClientRows(rows []mapsreview.Place) []clientRow {
+func makeClientRows(rows []mapsreview.Place, districts *mapsreview.DistrictManager) []clientRow {
 	out := make([]clientRow, 0, len(rows))
 	for _, row := range rows {
 		if row.Status != "success" || row.Name == "" || row.Rating == nil {
 			continue
 		}
-		mapsreview.EnrichPlaceLocation(&row)
+		mapsreview.EnrichPlaceLocation(districts, &row)
 		mapsreview.ApplyPlaceOverrides(&row)
 		removedEstimate := 0.0
 		if row.HasDefamationNotice {
@@ -168,9 +173,9 @@ func makeClientRows(rows []mapsreview.Place) []clientRow {
 	return out
 }
 
-func makeHTML(args args, data []clientRow) string {
+func makeHTML(args args, data []clientRow, districts *mapsreview.DistrictManager) string {
 	postcodes := uniqueSorted(data, func(row clientRow) string { return row.Postcode })
-	bezirke := allBezirkLabels()
+	bezirke := allBezirkLabels(districts)
 	if len(bezirke) == 0 {
 		bezirke = uniqueSorted(data, func(row clientRow) string { return row.BezirkLabel })
 	}
@@ -180,7 +185,7 @@ func makeHTML(args args, data []clientRow) string {
 	})
 	jsonData, _ := json.Marshal(data)
 	jsonText := strings.ReplaceAll(string(jsonData), "<", "\\u003c")
-	jsonBezirke, _ := json.Marshal(mapsreview.BezirkBoundaries())
+	jsonBezirke, _ := json.Marshal(districts.BezirkBoundaries())
 	bezirkText := strings.ReplaceAll(string(jsonBezirke), "<", "\\u003c")
 
 	postcodeOptions := ""
@@ -637,8 +642,8 @@ func analyticsHost(src string) string {
 	return host
 }
 
-func allBezirkLabels() []string {
-	bezirke := mapsreview.AllBezirke()
+func allBezirkLabels(districts *mapsreview.DistrictManager) []string {
+	bezirke := districts.AllBezirke()
 	out := make([]string, 0, len(bezirke))
 	for _, bezirk := range bezirke {
 		out = append(out, bezirk.ID+" "+bezirk.Name)

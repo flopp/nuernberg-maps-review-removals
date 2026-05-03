@@ -8,8 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chromedp/chromedp"
 	"nuernberg-maps-review-removals/internal/mapsreview"
+
+	"github.com/chromedp/chromedp"
 )
 
 type args struct {
@@ -38,6 +39,12 @@ func run(args args) error {
 	if err != nil {
 		return err
 	}
+
+	bm := mapsreview.NewDistrictManager()
+	if bm.Error != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to load bezirk boundaries: %v\n", bm.Error)
+	}
+
 	todo := buildTodo(rows, args)
 	fmt.Printf("Backfilling addresses: %d rows\n", len(todo))
 	if len(todo) == 0 {
@@ -54,7 +61,7 @@ func run(args args) error {
 
 	save := func() error {
 		for i := range rows {
-			mapsreview.EnrichPlaceLocation(&rows[i])
+			mapsreview.EnrichPlaceLocation(bm, &rows[i])
 			mapsreview.ApplyPlaceOverrides(&rows[i])
 		}
 		mapsreview.SortPlaces(rows)
@@ -91,7 +98,7 @@ func run(args args) error {
 				if postcode := mapsreview.ExtractPostcode(address); postcode != nil {
 					row.Postcode = postcode
 				}
-				mapsreview.EnrichPlaceLocation(row)
+				mapsreview.EnrichPlaceLocation(bm, row)
 				found++
 			}
 			done++

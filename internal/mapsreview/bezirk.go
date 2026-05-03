@@ -3,11 +3,11 @@ package mapsreview
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 // Source: Stadt Nürnberg Bezirksatlas InstantAtlas layer
@@ -65,40 +65,83 @@ type point struct {
 	Y float64
 }
 
-var (
-	bezirkOnce  sync.Once
-	bezirke     *bezirkIndex
-	bezirkError error
-)
-
-func AssignBezirk(lat, lng float64) *Bezirk {
-	return assignBezirk(lat, lng, "", false)
+type DistrictManager struct {
+	bezirke *bezirkIndex
+	Error   error
 }
 
-func AssignBezirkForPostcode(lat, lng float64, postcode string) *Bezirk {
-	return assignBezirk(lat, lng, postcode, true)
-}
-
-func AllBezirke() []Bezirk {
-	idx, err := loadBezirkIndex()
+func NewDistrictManager() *DistrictManager {
+	data, err := bezirkFS.ReadFile("data/nuernberg_statistische_bezirke.json")
 	if err != nil {
+		return &DistrictManager{Error: err}
+	}
+	var source bezirkMapSource
+	if err := json.Unmarshal(data, &source); err != nil {
+		return &DistrictManager{Error: err}
+	}
+	bbox := parseBoundingBox(source.BoundingBox)
+	idx := &bezirkIndex{
+		MinX: bbox[0], MinY: bbox[1], MaxX: bbox[2], MaxY: bbox[3],
+		PixelWidth: source.PixelWidth, PixelHeight: source.PixelHeight,
+	}
+	for _, feature := range source.Features {
+		polygon := bezirkPolygon{Bezirk: Bezirk{ID: feature.ID, Name: feature.Name}}
+		polygon.MinX, polygon.MinY = math.Inf(1), math.Inf(1)
+		polygon.MaxX, polygon.MaxY = math.Inf(-1), math.Inf(-1)
+		for _, path := range feature.Paths {
+			ring := decodeBezirkPath(path)
+			if len(ring) < 3 {
+				continue
+			}
+			polygon.Rings = append(polygon.Rings, ring)
+			for _, p := range ring {
+				polygon.MinX = math.Min(polygon.MinX, p.X)
+				polygon.MinY = math.Min(polygon.MinY, p.Y)
+				polygon.MaxX = math.Max(polygon.MaxX, p.X)
+				polygon.MaxY = math.Max(polygon.MaxY, p.Y)
+			}
+		}
+		if len(polygon.Rings) == 0 {
+			continue
+		}
+		idx.Polygons = append(idx.Polygons, polygon)
+	}
+	return &DistrictManager{bezirke: idx}
+}
+
+func NewDistrictManagerGeoJSON(geoJSONFile string) *DistrictManager {
+	if geoJSONFile == "" {
+		return NewDistrictManager()
+	}
+	return &DistrictManager{Error: fmt.Errorf("not implemented: loading bezirke from geojson %s", geoJSONFile)}
+}
+
+func (m *DistrictManager) AssignBezirk(lat, lng float64) *Bezirk {
+	return m.assignBezirk(lat, lng, "", false)
+}
+
+func (m *DistrictManager) AssignBezirkForPostcode(lat, lng float64, postcode string) *Bezirk {
+	return m.assignBezirk(lat, lng, postcode, true)
+}
+
+func (m *DistrictManager) AllBezirke() []Bezirk {
+	if m.Error != nil {
 		return nil
 	}
-	out := make([]Bezirk, 0, len(idx.Polygons))
-	for _, polygon := range idx.Polygons {
+	out := make([]Bezirk, 0, len(m.bezirke.Polygons))
+	for _, polygon := range m.bezirke.Polygons {
 		out = append(out, polygon.Bezirk)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
-func BezirkBoundaries() []BezirkBoundary {
-	idx, err := loadBezirkIndex()
-	if err != nil {
+func (m *DistrictManager) BezirkBoundaries() []BezirkBoundary {
+	if m.Error != nil {
 		return nil
 	}
-	out := make([]BezirkBoundary, 0, len(idx.Polygons))
-	for _, polygon := range idx.Polygons {
+	out := make([]BezirkBoundary, 0, len(m.bezirke.Polygons))
+	for _, polygon := range m.bezirke.Polygons {
 		boundary := BezirkBoundary{
 			ID:    polygon.ID,
 			Name:  polygon.Name,
@@ -107,7 +150,7 @@ func BezirkBoundaries() []BezirkBoundary {
 		for _, ring := range polygon.Rings {
 			points := make([][]float64, 0, len(ring)+1)
 			for _, p := range ring {
-				lat, lng := idx.unproject(p)
+				lat, lng := m.bezirke.unproject(p)
 				points = append(points, []float64{roundCoord(lat), roundCoord(lng)})
 			}
 			if len(points) > 0 {
@@ -121,69 +164,24 @@ func BezirkBoundaries() []BezirkBoundary {
 	return out
 }
 
-func assignBezirk(lat, lng float64, postcode string, allowFallback bool) *Bezirk {
-	idx, err := loadBezirkIndex()
-	if err != nil || !validCoordinate(lat, lng) {
+func (m *DistrictManager) assignBezirk(lat, lng float64, postcode string, allowFallback bool) *Bezirk {
+	if m.Error != nil || !validCoordinate(lat, lng) {
 		return nil
 	}
-	p := idx.project(lat, lng)
-	for _, polygon := range idx.Polygons {
+	p := m.bezirke.project(lat, lng)
+	for _, polygon := range m.bezirke.Polygons {
 		if polygon.contains(p) {
 			bezirk := polygon.Bezirk
 			return &bezirk
 		}
 	}
 	if allowFallback && NurembergPostcodeSet[strings.TrimSpace(postcode)] {
-		if polygon := idx.nearest(p); polygon != nil {
+		if polygon := m.bezirke.nearest(p); polygon != nil {
 			bezirk := polygon.Bezirk
 			return &bezirk
 		}
 	}
 	return nil
-}
-
-func loadBezirkIndex() (*bezirkIndex, error) {
-	bezirkOnce.Do(func() {
-		data, err := bezirkFS.ReadFile("data/nuernberg_statistische_bezirke.json")
-		if err != nil {
-			bezirkError = err
-			return
-		}
-		var source bezirkMapSource
-		if err := json.Unmarshal(data, &source); err != nil {
-			bezirkError = err
-			return
-		}
-		bbox := parseBoundingBox(source.BoundingBox)
-		idx := &bezirkIndex{
-			MinX: bbox[0], MinY: bbox[1], MaxX: bbox[2], MaxY: bbox[3],
-			PixelWidth: source.PixelWidth, PixelHeight: source.PixelHeight,
-		}
-		for _, feature := range source.Features {
-			polygon := bezirkPolygon{Bezirk: Bezirk{ID: feature.ID, Name: feature.Name}}
-			polygon.MinX, polygon.MinY = math.Inf(1), math.Inf(1)
-			polygon.MaxX, polygon.MaxY = math.Inf(-1), math.Inf(-1)
-			for _, path := range feature.Paths {
-				ring := decodeBezirkPath(path)
-				if len(ring) < 3 {
-					continue
-				}
-				polygon.Rings = append(polygon.Rings, ring)
-				for _, p := range ring {
-					polygon.MinX = math.Min(polygon.MinX, p.X)
-					polygon.MinY = math.Min(polygon.MinY, p.Y)
-					polygon.MaxX = math.Max(polygon.MaxX, p.X)
-					polygon.MaxY = math.Max(polygon.MaxY, p.Y)
-				}
-			}
-			if len(polygon.Rings) == 0 {
-				continue
-			}
-			idx.Polygons = append(idx.Polygons, polygon)
-		}
-		bezirke = idx
-	})
-	return bezirke, bezirkError
 }
 
 func parseBoundingBox(value string) [4]float64 {

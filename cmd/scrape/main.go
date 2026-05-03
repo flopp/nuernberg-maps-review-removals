@@ -44,6 +44,11 @@ func run(args args) error {
 		return err
 	}
 
+	districts := mapsreview.NewDistrictManager()
+	if districts.Error != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to load district boundaries: %v\n", districts.Error)
+	}
+
 	browserCtx, cancel := newScrapeBrowserContext(args)
 	defer cancel()
 
@@ -52,7 +57,7 @@ func run(args args) error {
 	if args.ScrapeOnly {
 		discoveries, err = mapsreview.ReadJSON(args.Discovery, []mapsreview.Discovery{})
 	} else {
-		discoveries, err = discoverPlaces(browserCtx, args)
+		discoveries, err = discoverPlaces(browserCtx, districts, args)
 	}
 	if err != nil {
 		return err
@@ -66,7 +71,7 @@ func run(args args) error {
 		return nil
 	}
 
-	rows, err := scrapePlaces(browserCtx, discoveries, args)
+	rows, err := scrapePlaces(browserCtx, discoveries, districts, args)
 	if err != nil {
 		return err
 	}
@@ -148,7 +153,7 @@ func writeMetadata(args args, discoveries []mapsreview.Discovery, rows []mapsrev
 	return mapsreview.WriteJSON(args.Metadata, m)
 }
 
-func discoverPlaces(ctx context.Context, args args) ([]mapsreview.Discovery, error) {
+func discoverPlaces(ctx context.Context, districts *mapsreview.DistrictManager, args args) ([]mapsreview.Discovery, error) {
 	existing, err := mapsreview.ReadJSON(args.Discovery, []mapsreview.Discovery{})
 	if err != nil {
 		return nil, err
@@ -232,7 +237,7 @@ func discoverPlaces(ctx context.Context, args args) ([]mapsreview.Discovery, err
 	return discoveries, nil
 }
 
-func extractPlace(ctx context.Context, discovery mapsreview.Discovery) (mapsreview.Place, error) {
+func extractPlace(ctx context.Context, discovery mapsreview.Discovery, districts *mapsreview.DistrictManager) (mapsreview.Place, error) {
 	if discovery.URL == "" {
 		return mapsreview.Place{}, errors.New("missing URL")
 	}
@@ -323,7 +328,7 @@ func extractPlace(ctx context.Context, discovery mapsreview.Discovery) (mapsrevi
 		row.Lat = mapsreview.FloatPtr(coords.Lat)
 		row.Lng = mapsreview.FloatPtr(coords.Lng)
 	}
-	mapsreview.EnrichPlaceLocation(&row)
+	mapsreview.EnrichPlaceLocation(districts, &row)
 	applyNotice(&row, notice)
 	mapsreview.ApplyPlaceOverrides(&row)
 	mapsreview.ComputeMetrics(&row)
@@ -710,7 +715,7 @@ func isBusinessName(candidate string) bool {
 }
 
 // normalizeCategory maps all category names to 12 canonical buckets.
-func scrapePlaces(ctx context.Context, discoveries []mapsreview.Discovery, args args) ([]mapsreview.Place, error) {
+func scrapePlaces(ctx context.Context, discoveries []mapsreview.Discovery, districts *mapsreview.DistrictManager, args args) ([]mapsreview.Place, error) {
 	previous, err := mapsreview.ReadJSON(args.Out, []mapsreview.Place{})
 	if err != nil {
 		return nil, err
@@ -720,7 +725,7 @@ func scrapePlaces(ctx context.Context, discoveries []mapsreview.Discovery, args 
 		rows[row.ID] = row
 	}
 	if args.BannerAuditOnly {
-		return auditBannerPlaces(ctx, discoveries, args, rows)
+		return auditBannerPlaces(ctx, discoveries, districts, args, rows)
 	}
 
 	todo := make([]mapsreview.Discovery, 0, len(discoveries))
@@ -755,7 +760,7 @@ func scrapePlaces(ctx context.Context, discoveries []mapsreview.Discovery, args 
 		if changedSinceSave == 0 || (!force && changedSinceSave < saveEvery) {
 			return nil
 		}
-		if err := saveRows(args, rows); err != nil {
+		if err := saveRows(args, rows, districts); err != nil {
 			return err
 		}
 		changedSinceSave = 0
@@ -765,7 +770,7 @@ func scrapePlaces(ctx context.Context, discoveries []mapsreview.Discovery, args 
 	for i, place := range todo {
 		fmt.Printf("[%d/%d] %s\n", i+1, len(todo), displayPlaceName(place))
 		previousRow, hadPreviousRow := rows[place.ID]
-		row, err := extractPlace(ctx, place)
+		row, err := extractPlace(ctx, place, districts)
 		if err != nil {
 			errorText := err.Error()
 			if hadPreviousRow && previousRow.Status == "success" {
@@ -843,7 +848,7 @@ func scrapePlaces(ctx context.Context, discoveries []mapsreview.Discovery, args 
 	return out, nil
 }
 
-func auditBannerPlaces(ctx context.Context, discoveries []mapsreview.Discovery, args args, rows map[string]mapsreview.Place) ([]mapsreview.Place, error) {
+func auditBannerPlaces(ctx context.Context, discoveries []mapsreview.Discovery, districts *mapsreview.DistrictManager, args args, rows map[string]mapsreview.Place) ([]mapsreview.Place, error) {
 	todo := make([]mapsreview.Discovery, 0, len(discoveries))
 	for _, place := range discoveries {
 		row, ok := rows[place.ID]
@@ -876,7 +881,7 @@ func auditBannerPlaces(ctx context.Context, discoveries []mapsreview.Discovery, 
 		if changedSinceSave == 0 || (!force && changedSinceSave < saveEvery) {
 			return nil
 		}
-		if err := saveRows(args, rows); err != nil {
+		if err := saveRows(args, rows, districts); err != nil {
 			return err
 		}
 		changedSinceSave = 0
@@ -909,7 +914,7 @@ func auditBannerPlaces(ctx context.Context, discoveries []mapsreview.Discovery, 
 		next.ReadAt = mapsreview.NowISO()
 		applyStatsIfPresent(&next, stats)
 		applyNotice(&next, notice)
-		mapsreview.EnrichPlaceLocation(&next)
+		mapsreview.EnrichPlaceLocation(districts, &next)
 		mapsreview.ApplyPlaceOverrides(&next)
 		mapsreview.ComputeMetrics(&next)
 		rows[next.ID] = next
@@ -979,10 +984,10 @@ func displayPlaceName(place mapsreview.Discovery) string {
 	return place.ID
 }
 
-func saveRows(args args, rows map[string]mapsreview.Place) error {
+func saveRows(args args, rows map[string]mapsreview.Place, districts *mapsreview.DistrictManager) error {
 	out := mapValues(rows)
 	for i := range out {
-		mapsreview.EnrichPlaceLocation(&out[i])
+		mapsreview.EnrichPlaceLocation(districts, &out[i])
 		mapsreview.ApplyPlaceOverrides(&out[i])
 	}
 	mapsreview.SortPlaces(out)

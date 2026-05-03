@@ -7,12 +7,14 @@ import (
 )
 
 func TestMakeClientRowsSkipsRowsWithoutRating(t *testing.T) {
+	districts := mapsreview.NewDistrictManager()
+
 	rows := []mapsreview.Place{
 		{ID: "with-rating", Name: "Rated", Rating: mapsreview.FloatPtr(4.5), ReviewCount: mapsreview.IntPtr(10), Status: "success"},
 		{ID: "no-rating", Name: "No rating", Rating: nil, ReviewCount: mapsreview.IntPtr(0), Status: "success", PlaceState: mapsreview.PlaceStateNoPublicReviews},
 	}
 
-	got := makeClientRows(rows)
+	got := makeClientRows(rows, districts)
 	if len(got) != 1 {
 		t.Fatalf("len(makeClientRows) = %d, want 1", len(got))
 	}

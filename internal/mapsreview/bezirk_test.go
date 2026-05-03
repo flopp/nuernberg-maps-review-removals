@@ -3,7 +3,8 @@ package mapsreview
 import "testing"
 
 func TestAssignBezirkExact(t *testing.T) {
-	bezirk := AssignBezirk(49.4505, 11.0786)
+	m := NewDistrictManager()
+	bezirk := m.AssignBezirk(49.4505, 11.0786)
 	if bezirk == nil {
 		t.Fatal("expected a Bezirk for central Nürnberg coordinates")
 	}
@@ -13,7 +14,8 @@ func TestAssignBezirkExact(t *testing.T) {
 }
 
 func TestAssignBezirkFallbackForNurembergPostcode(t *testing.T) {
-	bezirk := AssignBezirkForPostcode(49.4486432, 11.0777619, "90402")
+	m := NewDistrictManager()
+	bezirk := m.AssignBezirkForPostcode(49.4486432, 11.0777619, "90402")
 	if bezirk == nil {
 		t.Fatal("expected fallback Bezirk assignment inside Nürnberg")
 	}
@@ -23,14 +25,16 @@ func TestAssignBezirkFallbackForNurembergPostcode(t *testing.T) {
 }
 
 func TestAssignBezirkDoesNotFallbackOutsideNuremberg(t *testing.T) {
-	bezirk := AssignBezirkForPostcode(49.4771, 10.9887, "90762")
+	m := NewDistrictManager()
+	bezirk := m.AssignBezirkForPostcode(49.4771, 10.9887, "90762")
 	if bezirk != nil {
 		t.Fatalf("expected no Bezirk outside Nürnberg, got %#v", bezirk)
 	}
 }
 
 func TestBezirkBoundaries(t *testing.T) {
-	boundaries := BezirkBoundaries()
+	m := NewDistrictManager()
+	boundaries := m.BezirkBoundaries()
 	if len(boundaries) == 0 {
 		t.Fatal("expected Bezirk map boundaries")
 	}
